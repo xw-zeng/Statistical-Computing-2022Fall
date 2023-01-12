@@ -43,16 +43,16 @@
 - **EM Algorithm**: Likelihood function of complete data, Q function, update function in M step. 
 - **Improving EM Algorithm**: Monte Carlo EM, ECM, EM Gradient, Aitken Acceleration.
 - **Variance Estimation**: Bootstrap, Empirical Information, Louis method.
-- My score of this assignment is: **100/100**.
+- My score of this assignment is: **100/100**. Comments from TA: It's commonplace that using different methods to estimate the variance of EM estimator leads to different results.
 
 
 
 
-<h3 id="4">Assignment 4. Numerical Integration & Monte Calo Simulation</h3>
+<h3 id="4">Assignment 4. Numerical Integration & Monte Carlo Simulation</h3>
 
 - Problem sets: 5.4, 5.5, 6.3(a)(b), 6.5, 6.9(a).
 - **Numerical Integration**: Romberg integration, Gaussian Quadrature.
-- **Monte Calo Simulation**: Importance sampling, rejection sampling, antithetic sampling, control variates, sequence importance sampling.
+- **Monte Carlo Simulation**: Importance sampling, rejection sampling, antithetic sampling, control variates, sequence importance sampling.
 - **Variance Estimation**: Bootstrap, Empirical Information, Louis method.
 - My score of this assignment is: **98/100**. I forgot to derive the exact value of optimal $\lambda$ in 6.5(b). This mistake has been revised in the latest version.
 
