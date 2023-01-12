@@ -1,0 +1,850 @@
+---
+title: "Assignment 2"
+author: "xw-zeng"
+date: "2022-10-20"
+output: 
+  rmdformats::material:
+    highlight: kate
+    self_contained: true
+    thumbnails: true
+    gallery: true
+    fig_width: 8
+    fig_height: 6
+    df_print: kable
+pkgdown:
+  as_is: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# README
+
+Install and load the packages.
+```{r pkg, message=FALSE, warning=FALSE}
+##install.packages('DT')
+##install.packages('ggplot2')
+##install.packages('dplyr')
+##install.packages('patchwork')
+library(DT) ##For table preview.
+library(ggplot2) ##For visualization.
+library(dplyr) ##For set arithmetic.
+library(patchwork) ##For plot composing.
+```
+
+List of optimization functions.
+
+- `Local_Search`: Local Search method with Deepest Ascent or Random Ascent.
+- `Tabu_Algorithm`: Tabu Algorithm with four attributes defined by myself.
+- `Simulated_Annealing_C`: Simulated Annealing for combinatorial optimization.
+- `Simulated_Annealing_N`: Simulated Annealing for numerical optimization.
+- `Genetic_Algorithm`: Genetic Algorithm with order crossover or edge-recombination crossover strategy.
+
+# 3.1
+
+## (a)
+
+Load and preview data `baseball.dat`.
+```{r}
+data <- read.table('baseball.dat', header = TRUE)
+DT::datatable(data)
+```
+
+Modify variable types.
+```{r}
+data$freeagent <- factor(data$freeagent)
+data$arbitration <- factor(data$arbitration)
+```
+
+Generate the dependent variable `logsalary` and covariates `data_sub`.
+```{r}
+logsalary <- log(data$salary)
+data_sub <- data[, -1]
+```
+
+Define the `Local Search` function, which enables us to choose Steepest Ascent or Random Ascent by setting the logical parameter `steepest`.
+
+- `y`: dependent variable.
+- `vars`: a data frame of all covariates.
+- `randnum`: number of random starts.
+- `itertime`: iteration times for each random start.
+- `steepest`: a logical indicating whether Steepest Ascent or Random Ascent is applied.
+```{r}
+Local_Search <- function(y, vars, randnum, itertime, steepest = FALSE){
+  
+  ###INITIAL VALUES###
+  var_num <- ncol(vars)
+  start <- matrix(NA, randnum, var_num)
+  for(i in 1:randnum){start[i, ] <- rbinom(var_num, 1, 0.5)}
+  aic <- matrix(NA, randnum, itertime)
+  results <- matrix(NA, randnum, var_num)
+  
+  ###FUNCTIONS###
+  generate_N1 <- function(x){
+    out <- matrix(NA, var_num, var_num)
+    order <- sample(1:var_num, var_num)
+    for (i in 1:var_num){
+      x_temp <- x
+      x_temp[order[i]] <- !x[order[i]]
+      out[i, ] <- x_temp}
+    return (out)
+  }
+  generate_AIC <- function(x){
+    vars_run <- vars[, x == 1]
+    fit <- lm(y ~ ., vars_run)
+		return (extractAIC(fit)[2])
+  }
+  
+  ###MAIN###
+  ##ITERATE EACH RANDOM START
+  for (i in 1:randnum){
+    x <- start[i, ]
+
+    for (j in 1:itertime){
+		  aic_local <- generate_AIC(x)
+		  n1 <- generate_N1(x)
+		  flag <- FALSE
+		  
+		  ##MOVE IN A LOCAL NEIGHBORHOOD
+		  for (k in 1:var_num){
+		    x_run <- n1[k, ]
+		    aic_run <- generate_AIC(x_run)
+		    ##RANDOM ASCENT
+		    if (aic_run < aic_local){
+		      flag <- TRUE
+		      aic_local <- aic_run
+		      x <- x_run
+		      ##STEEPEST ASCENT
+		      if (steepest == FALSE){break}}
+		  }
+      
+		  ##IF THE BEST COMBINATION DOESN'T CHANGE, BREAK
+		  if (flag == TRUE){aic[i, j] <- aic_local}
+		  else {break}
+    }
+    
+    results[i, ] <- x
+    if (is.na(aic[i, j])){aic[i, j:itertime] <- aic[i, j - 1]}
+  }
+  
+  ###OUTPUT###
+  structure(list(method = paste(ifelse(steepest, 'Steepest Ascent', 'Random Ascent'), 'Local Search'),
+                 start = start,
+                 x_best = results,
+                 aic_best = aic[, itertime],
+                 aic = aic,
+                 rand_time = randnum,
+                 iter_time = itertime,
+                 graph = ggplot() + geom_point(mapping = aes(x = 1:(randnum * itertime), y = c(t(aic)))) + coord_cartesian(ylim = c(-420, -360)) + labs(title = paste(ifelse(steepest, 'Steepest Ascent', 'Random Ascent'), 'Local Search'), x = 'Iteration', y = 'AIC') + theme_light()))
+}
+```
+
+Compute results.
+```{r}
+##Random Ascent
+set.seed(2023)
+Local_Search(logsalary, data_sub, 10, 15)
+##Steepest Ascent
+set.seed(520)
+Local_Search(logsalary, data_sub, 10, 15, TRUE)
+```
+
+If iterated for the same times, the convergence of Steepest Ascent is always better than Random Ascent at the cost of computing speed. Besides, it turns out that Local Search algorithm frequently converge to local optimal that are not globally competitive. Therefore, 10 random starting values are generated and run in the algorithm to overcome this problem.
+
+# 3.2
+
+## (a)
+
+Define the `Tabu Algorithm` function.
+
+- `y`: dependent variable.
+- `vars`: a data frame of all covariates.
+- `term`: length of term for tabu moves.
+- `itertime`: iteration times.
+- `A4`: a logical indicating whether Attribute 4 is applied (added for question (b)).
+- `A4_value`: a parameter in Attribute 4.
+
+**Four attributes** are defined in the following algorithm.
+
+- `Attribute 1`: a predictor is added or deleted from the model.
+- `Attribute 2`: exchange the absent variable for the variable present in the model.
+- `Attribute 3`: value of change in AIC.
+- `Attribute 4`: value of change in AIC exceeds `A4_value`.
+```{r}
+Tabu_Algorithm <- function(y, vars, term, itertime, A4 = FALSE, A4_value = 1){
+  
+  ###FUNCTIONS###
+  ##Attribute 1
+  Attribute_1 <- function(x){
+    out <- matrix(NA, var_num, var_num)
+    for (i in 1:var_num){
+      x_temp <- x
+      x_temp[i] <- !x[i]
+      out[i, ] <- x_temp}
+    return (out)
+  }
+  ##Attribute 2
+  Attribute_2 <- function(x){
+    idx_absent <- which(x == 0)
+    idx_present <- which(x == 1)
+    out <- matrix(NA, length(idx_absent) * length(idx_present), var_num)
+    idx <- 1
+    df_idx <- data.frame('index' = 1:(length(idx_absent) * length(idx_present)), 'absent' = NA, 'present' = NA)
+    for (i in idx_absent){
+      for (j in idx_present){
+        x_temp <- x
+        x_temp[i] <- !x[i]; x_temp[j] <- !x[j]
+        out[idx, ] <- x_temp
+        df_idx$absent[idx] <- i; df_idx$present[idx] <- j
+        idx <- idx + 1}}
+    structure(list(out = out, df = df_idx))
+  }
+  generate_AIC <- function(x){
+    vars_run <- vars[, x == 1]
+    fit <- lm(y ~ ., vars_run)
+    fit_full <- lm(y ~ ., vars)
+    return (extractAIC(fit)[2])
+  }
+  
+  ###INITIAL VALUES###
+  var_num <- ncol(vars)
+  x <- rbinom(var_num, 1, 0.5)
+  aic <- generate_AIC(x)
+  aic_list <- aic
+  ##ATTRIBUTE 1
+  tabu_list1 <- rep(0, var_num)
+  ##ATTRIBUTE 2
+  tabu_list2 <- matrix(0, var_num, var_num)
+  ##ATTRIBUTE 3
+  tabu_list3 <- data.frame('change' = NA, 'term' = itertime + 1)
+  ##ATTRIBUTE 4
+  tabu_list4 <- 0
+  
+  ###MAIN###
+  for (i in 1:itertime){
+    aic_best <- min(aic_list)
+    ##ATTRIBUTE 1
+    n1 <- Attribute_1(x); aic_current1 <- c()
+    for (j in 1:nrow(n1)){
+		  x_run <- n1[j, ]
+		  aic_run <- generate_AIC(x_run)
+      aic_current1 <- c(aic_current1, aic_run)
+    }
+    ##ATTRIBUTE 2
+    r2 <- Attribute_2(x); n2 <- r2[['out']]; aic_current2 <- c()
+    for (j in 1:nrow(n2)){
+		  x_run <- n2[j, ]
+		  aic_run <- generate_AIC(x_run)
+      aic_current2 <- c(aic_current2, aic_run)
+    }
+    aic_current <- c(aic_current1, aic_current2)
+    ##WHETHER NEW MODEL SHOULD BE TAKEN
+    better <- FALSE
+    for (j in 1:length(aic_current)){
+      aic_run <- aic_current[order(aic_current)][j]
+      idx <- which(aic_current == aic_run)[1]
+      if (idx > nrow(n1)){
+        flag <- 2
+        idx <- idx - nrow(n1)
+        x_current <- n2[idx, ]
+        idx1 <- r2[['df']]$absent[which(r2[['df']]$index == idx)]
+        idx2 <- r2[['df']]$present[which(r2[['df']]$index == idx)]
+      }
+      else {flag <- 1; x_current <- n1[idx, ]}
+      aic_change <- aic_run - aic
+      ##NOT IN TABU LIST
+      if ((((flag == 1 & tabu_list1[idx] == 0) |
+            (flag == 2 & tabu_list2[idx1, idx2] == 0)) &
+           aic_change %in% tabu_list3$change == FALSE &
+           (tabu_list4 == 0 | abs(aic_change) < A4_value)) |
+          ##ASPIRATION: IN TABU LIST, BEST SEEN OVERALL
+          (aic_run < aic_best)){
+        better <- TRUE
+        x <- x_current
+        aic <- aic_run
+        if (aic < aic_best){x_best <- x; aic_best <- aic}
+        aic_list <- c(aic_list, aic)
+        break
+      }
+    }
+    
+    ##NO BETTER MODEL → BREAK
+    if (better == FALSE){break}
+
+    ##DECREMENT TABU TERMS
+    ##ATTRIBUTE 1
+    for (k in 1:length(tabu_list1)){
+      if (tabu_list1[k] != 0){tabu_list1[k] <- tabu_list1[k] - 1}}
+    ##ATTRIBUTE 2
+    for (k in 1:length(tabu_list2)){
+      if (tabu_list2[k] != 0){tabu_list2[k] <- tabu_list2[k] - 1}}
+    ##ATTRIBUTE 3
+    idx_remove <- c()
+    for (k in 1:nrow(tabu_list3)){
+      if (tabu_list3$term[k] > 1){
+        tabu_list3$term[k] <- tabu_list3$term[k] - 1}
+      else {idx_remove <- c(idx_remove, k)}}
+    if (length(idx_remove) != 0){tabu_list3 <- tabu_list3[- idx_remove, ]}
+    ##ATTRIBUTE 4
+    if (tabu_list4 != 0){tabu_list4 <- tabu_list4 - 1}
+      
+    ##UPDATE TABU LIST
+    ##ATTRIBUTE 1
+    if (flag == 1){tabu_list1[idx] <- term}
+    ##ATTRIBUTE 2
+    else if (flag == 2){tabu_list2[idx1, idx2] <- term; tabu_list2[idx2, idx1] <- term}
+    ##ATTRIBUTE 3
+    tabu_list3 <- rbind(tabu_list3, data.frame('change' = - aic_change, 'term' = term))
+    ##ATTRIBUTE 4
+    if (A4 ==TRUE & abs(aic_change) > A4_value){tabu_list4 <- term}
+  }
+  
+  ###OUTPUT###
+  structure(list(method = 'Tabu Algorithm',
+                 x_best = x_best,
+                 aic_best = min(aic_list),
+                 aic = aic_list[-1],
+                 tabu_term = term,
+                 iter_time = i,
+                 graph = ggplot() + geom_line(mapping = aes(x = 1:i, y = aic_list[-1])) + coord_cartesian(ylim = c(-420, -360)) + labs(title = 'Tabu Algorithm', x = 'Iteration', y = 'AIC') + theme_light()))
+}
+```
+
+Compute results. According to the following searching curve, 5 is a suitable tabu term because the algorithm attains the global optimal.
+```{r warning=FALSE, fig.cap='Fig1: Tabu Algorithm without Attribute 4'}
+set.seed(1314)
+Tabu_Algorithm(logsalary, data_sub, 5, 50)
+```
+
+If the tabu term is **too long**, then good solutions may be skipped.
+```{r warning=FALSE}
+set.seed(1314)
+Tabu_Algorithm(logsalary, data_sub, 10, 50)
+```
+
+If the tabu term is **too short**, then the algorithm may end up in cycling and cannot skip out of local optimal.
+```{r warning=FALSE}
+set.seed(1314)
+Tabu_Algorithm(logsalary, data_sub, 2, 50)
+```
+
+## (b)
+
+Allow Attribute 4 (change in AIC exceeds some value) to be included
+on the tabu list.
+```{r warning=FALSE, fig.cap='Fig2: Tabu Algorithm with Attribute 4'}
+set.seed(1314)
+Tabu_Algorithm(logsalary, data_sub, 5, 50, A4 = TRUE)
+```
+
+Compare Fig2 with Fig1. It turns out that if a move with change in AIC greater than A4_value (default is 1) is taken, Attribute 4 can prevent any other drastic changes for a period of time (tabu term), allowing better exploration of the newly entered region of solution space before moving far away. Certainly the search diversity is promoted.
+
+# 3.3
+
+## (b)
+
+Define the `Simulated Annealing` function for combinatorial optimization.
+
+- `y`: dependent variable.
+- `vars`: a data frame of all covariates.
+- `taustart`: initial temperature.
+- `iterstart`: iteration time of the first state.
+- `k`: number of changes to the candidate solution.
+- `statenum`: number of temperature states.
+```{r}
+Simulated_Annealing_C <- function(y, vars, taustart, iterstart, k, statenum){
+
+  ###INITIAL VALUES###
+  var_num <- ncol(vars)
+  x <- rbinom(var_num, 1, 0.5) ##RANDOM STARTING VALUE
+  tau <- taustart
+  itertime <- iterstart
+  cooling <- seq(iterstart, iterstart + 20 * (statenum - 1), 20) ##ITERATION TIMES AT EACH TEMPERATURE
+  aic_list <- c() ##HISTORICAL AIC
+  x_list <- matrix(NA, sum(cooling), var_num)
+  idx <- 0
+
+  ###FUNCTIONS###
+  generate_N1 <- function(x){
+    out <- matrix(NA, var_num, var_num)
+    for (i in 1:var_num){
+      x_temp <- x
+      x_temp[i] <- !x[i]
+      out[i, ] <- x_temp}
+    return (out)
+  }
+  generate_N2 <- function(x){
+    out <- matrix(NA, choose(var_num, 2), var_num)
+    idx <- 1
+    for (i in 1:(var_num - 1)){
+      for (j in (i + 1):var_num){
+        x_temp <- x
+        x_temp[i] <- !x[i]
+        x_temp[j] <- !x[j]
+        out[idx, ] <- x_temp
+        idx <- idx + 1}}
+    return (out)
+  }
+  generate_N3 <- function(x){
+    out <- matrix(NA, choose(var_num, 3), var_num)
+    idx <- 1
+    for (i in 1:(var_num - 2)){
+      for (j in (i + 1):(var_num - 1)){
+        for (q in (j + 1):var_num){
+          x_temp <- x
+          x_temp[i] <- !x[i]
+          x_temp[j] <- !x[j]
+          x_temp[q] <- !x[q]
+          out[idx, ] <- x_temp
+          idx <- idx + 1}}}
+    return (out)
+  }
+  ##(K-1) NEIGHBORHOOD IS A SUBSET OF K NEIGHBORHOOD ACCORDING TO 蒋斐宇老师
+  generate_N <- function(x, k){
+    if (k == 1){return (generate_N1(x))}
+    if (k == 2){return (rbind(generate_N1(x), generate_N2(x)))}
+    if (k == 3){return (rbind(generate_N1(x), generate_N2(x), generate_N3(x)))}
+  }
+  generate_AIC <- function(x){
+    vars_run <- vars[, x == 1]
+    fit <- lm(y ~ ., vars_run)
+		return (extractAIC(fit)[2])
+  }
+
+  ###MAIN###
+  ##ITERATE EACH STATE
+  for (i in 1:statenum){
+    
+    ##ITERATE AT THE SAME TEMPERATURE
+      for (j in 1:itertime){
+        aic_start <- generate_AIC(x)
+        n <- generate_N(x, k)
+        x_run <- n[sample(1:nrow(n), 1), ]
+        aic_run <- generate_AIC(x_run)
+        
+        ##ACCEPT THE NEW MODEL WITH PROBABILITY P
+        p <- min(1, exp((aic_start - aic_run) / tau))
+        flag <- rbinom(1, 1, p)
+        if (flag == 1){
+          x <- x_run
+          aic_list <- c(aic_list, aic_run)}
+        else {
+          if (length(aic_list) == 0){aic_list <- aic_start}
+          else {aic_list <- c(aic_list, aic_list[length(aic_list)])}}
+        
+        idx <- idx + 1
+        x_list[idx, ] <- x
+      }
+    
+    ##COOLING
+    tau <- 0.9 * tau
+    itertime <- itertime + 20
+  }
+
+  ###OUTPUT###
+  structure(list(method = paste(k, '-Neighborhood ', 'Simulated Annealing for combinatorial optimization', sep = ''), 
+                 iter_best = (1:sum(cooling))[aic_list == min(aic_list)],
+                 x_best = x_list[(1:sum(cooling))[aic_list == min(aic_list)][1], ],
+                 aic_best = min(aic_list),
+                 x = x_list,
+                 aic = aic_list,
+                 tau_start = taustart,
+                 state_num = statenum,
+                 iter_time = sum(cooling),
+                 cooling = cooling,
+                 graph = ggplot() + geom_line(mapping = aes(x = 1:sum(cooling), y = aic_list)) + coord_cartesian(ylim = c(-420, -360)) + labs(title = paste('AIC Curve of ', k, '-Neighborhood ', 'Simulated Annealing for combinatorial optimization', sep = ''), x = 'Iteration', y = 'AIC') + theme_light()))
+}
+```
+
+Compute results of 2-Neighborhood Simulated Annealing.
+```{r warning=FALSE}
+set.seed(5201314)
+result_N2 <- Simulated_Annealing_C(logsalary, data_sub, 1, 50, 2, 15)
+print(paste('BEST LIST OF PREDICTORS FOUND:', paste(result_N2$x_best, collapse = ', '))); print(paste('AIC VALUE:', result_N2$aic_best)); print(paste('NO. OF FIRST BEST ITERATION:', paste(result_N2$iter_best[1], collapse = ', ')))
+result_N2$graph
+```
+
+Compute results of 3-Neighborhood Simulated Annealing.
+```{r warning=FALSE}
+set.seed(5201314)
+result_N3 <- Simulated_Annealing_C(logsalary, data_sub, 1, 50, 3, 18)
+print(paste('BEST LIST OF PREDICTORS FOUND:', paste(result_N3$x_best, collapse = ', '))); print(paste('AIC VALUE:', result_N3$aic_best)); print(paste('NO. OF FIRST BEST ITERATION:', paste(result_N3$iter_best[1], collapse = ', ')))
+result_N3$graph
+```
+
+According to the two AIC curves above, 3-Neighborhood Simulated Annealing needs more iterations than 2-Neighborhood to converge to the lowest AIC.
+
+On condition that the proposal distribution is discrete uniform, the difference between 2-Neighborhood and 3-Neighborhood Simulated Annealing is that in each iteration, the latter's candidates are far more than the former, so **the probability of choosing a better candidate in 2-Neighborhood is far higher than that in 3-Neighborhood**, which means the latter requires more iterations, cooler temperatures, or both to converge to the global optimal.
+
+# 2.1*
+
+Import the sample points.
+```{r}
+X <- c(1.77, -0.23, 2.76, 3.80, 3.47, 56.75, -1.34, 4.24, -2.44, 3.29, 3.71, -2.40, 4.53, -0.07, -1.05, -13.87, -2.53, -1.75, 0.27, 43.21)
+```
+
+Define the pdf of $Cauchy(\theta, 1)$.
+```{r}
+fx <- function(x, location){1 / pi * (1 / ((x - location) ^ 2 + 1))}
+```
+
+Define the log likelihood function. The objective function is `-logL`.
+```{r}
+logL <- function(theta){sum(log(fx(X, theta)))}
+```
+
+Define the `Simulated Annealing` function for numerical optimization.
+
+- `xstart`: starting value.
+- `taustart`: initial temperature.
+- `iterstart`: iteration time of the first state.
+- `statenum`: number of temperature states.
+- `method`: proposal density function to use, e.g. 'normal', 'cauchy'.
+
+The following algorithm provides two alternatives of proposal density function. 
+
+- Normal Distribution $N(x^{(t)},\tau^{(k)})$.
+$$
+g^{(t)}(·|x^{(t)})=(2\pi\tau^{(k)})^{-\frac 1 2}exp\{-\frac {(x-x^{(t)})^2} {2\tau^{(k)}}\}
+$$
+
+- Cauchy Distribution $Cauchy(x^{(t)},\tau^{(k)})$.
+$$
+g^{(t)}(·|x^{(t)})={\frac 1\pi} * {\frac {\tau^{(k)}} {(x - x^{(t)}) ^ 2 + ({\tau^{(k)}}) ^ 2}}
+$$
+
+$x^{(t)}$ is the current $x$. $\tau^{(k)}$ is the temperature of $k^{th}$ stage.
+
+The neighborhood of $x^{(t)}$ can be regarded as the whole set of real numbers. Both of the proposal density functions follow unimodal distribution. The probability of selecting a nearby neighbor will increase as temperature $\tau^{(k)}$ goes down, which means $x^*$ becomes less likely to jump to a distant neighbor. This performance is consistent with the key idea of Simulated Annealing, so both functions are suitable for the algorithms.
+
+The main difference of the two methods is that Cauchy distribution is a fat-tailed distribution, indicating that a distant neighbor is more likely to be selected as the candidate than Normal distribution. As a result, Simulated Annealing with Cauchy may be better at skipping out of the local optimal.
+```{r}
+Simulated_Annealing_N <- function(xstart, taustart, iterstart, statenum, method){
+
+  ###INITIAL VALUES###
+  x <- xstart
+  tau <- taustart
+  itertime <- iterstart
+  cooling <- seq(iterstart, iterstart + 20 * (statenum - 1), 20)
+  logL_list <- c()
+  x_list <- c()
+
+  ###FUNCTIONS###
+  generate_x <- function(x){
+    if (method == 'normal'){out <- rnorm(1, x, sqrt(tau))}
+    if (method == 'cauchy'){out <- rcauchy(1, x, tau)}
+    return (out)
+  }
+
+  ###MAIN###
+  ##ITERATE EACH STATE
+  for (i in 1:statenum){
+    
+    ##ITERATE AT THE SAME TEMPERATURE
+      for (j in 1:itertime){
+        logL_start <- - logL(x)
+        x_run <- generate_x(x)
+        logL_run <- - logL(x_run)
+        
+        ##ACCEPT THE NEW MODEL WITH PROBABILITY P
+        p <- min(1, exp((logL_start - logL_run) / tau))
+        flag <- rbinom(1, 1, p)
+        if (flag == 1){
+          x <- x_run
+          logL_list <- c(logL_list, logL_run)}
+        else {
+          if (length(logL_list) == 0){logL_list <- logL_start}
+          else {logL_list <- c(logL_list, logL_list[length(logL_list)])}}
+        
+        x_list <- c(x_list, x)
+      }
+    
+    ##COOLING
+    tau <- 0.9 * tau
+    itertime <- itertime + 20
+  }
+
+  ###OUTPUT###
+  structure(list(method = paste('Simulated Annealing for numerical optimization (', method, ')', sep = ''), 
+                 iter_best = (1:sum(cooling))[logL_list == min(logL_list)],
+                 x_best = x_list[(1:sum(cooling))[logL_list == min(logL_list)][1]],
+                 logL_best = - min(logL_list),
+                 x = x_list,
+                 logL = - logL_list,
+                 tau_start = taustart,
+                 state_num = statenum,
+                 iter_time = sum(cooling),
+                 cooling = cooling,
+                 graph = ggplot() + geom_line(mapping = aes(x = 1:sum(cooling), y = - logL_list)) + coord_cartesian(ylim = c(-73.3, -72.9)) + labs(title = paste('Simulated Annealing for numerical optimization (', method, ')', sep = ''), x = 'Iteration', y = 'logL') + theme_light()))
+}
+```
+
+Compute results with normal proposal density function.
+```{r warning=FALSE}
+set.seed(5201314)
+result_n <- Simulated_Annealing_N(-1, 0.02, 50, 20, 'normal')
+print(paste('BEST THETA:', paste(result_n$x_best, collapse = ', '))); print(paste('LOG LIKELIHOOD VALUE:', result_n$logL_best)); print(paste('NO. OF FIRST BEST ITERATION:', paste(result_n$iter_best[1], collapse = ', ')))
+result_n$graph
+```
+
+Compute results with cauchy proposal density function.
+```{r warning=FALSE}
+set.seed(5201314)
+result_c <- Simulated_Annealing_N(-1, 0.02, 50, 20, 'cauchy')
+print(paste('BEST THETA:', paste(result_c$x_best, collapse = ', '))); print(paste('LOG LIKELIHOOD VALUE:', result_c$logL_best)); print(paste('NO. OF FIRST BEST ITERATION:', paste(result_c$iter_best[1], collapse = ', ')))
+result_c$graph
+```
+
+Compared with combinatorial optimizaition, simulated annealing for numerical optimization always requires more iterations to converge and the precision of global optimal will continuously increase.
+
+# 3.6
+
+## (a)
+
+Load and preview data `geneticmapping.dat`.
+```{r}
+data <- read.table('geneticmapping.dat', header = TRUE)
+DT::datatable(data)
+```
+
+Define the `Genetic Algorithm` function.
+
+- `df`: genetic mapping data.
+- `P`: size of each generation.
+- `m`: mutation rate.
+- `itertime`: number of generations to run.
+- `method`: crossover operator to use, e.g. 'order', 'edge'.
+- `k`: number of loci selected to be order crossovered.
+```{r}
+Genetic_Algorithm <- function(df, P, m, itertime, method, k = NULL){
+  
+  ###FUNCTIONS###
+  ##DISTANCE
+  d_hat <- function(theta1, theta2){
+    out <- 1 / n * sum(abs(df[, theta1] - df[, theta2]))
+    return (out)
+  }
+  ##T
+  generate_T <- function(theta1, theta2){
+    if (d_hat(theta1, theta2) == 0 | d_hat(theta1, theta2) == 1){out <- 0}
+    else {out <- n * (d_hat(theta1, theta2) * log(d_hat(theta1, theta2)) + (1 - d_hat(theta1, theta2)) * log(1 - d_hat(theta1, theta2)))}
+    return (out)
+  }
+  ##PROFILE LOG LIKELIHOOD
+  plog_L <- function(theta){
+    out <- c()
+    for (a in 1:P){
+      l <- 0
+      for (b in 1:(c - 1)){l <- l + T_matrix[theta[a, b], theta[a, b + 1]]}
+      out <- c(out, l)
+    }
+    return (out)
+  }
+  ##FITNESS: RANK SPECIFICATION
+  fitness <- function(l){
+    phi <- 2 * rank(l) / (P * (P + 1))
+    return (phi)
+  }
+  ##ORDER CROSSOVER
+  order_crossover <- function(theta1, theta2){
+    idx_cross <- sample(1:c, k)
+    ord1 <- c(); ord2 <- c()
+    for (a in 1:k){
+      ord1 <- c(ord1, which(theta1 == idx_cross[a]))
+      ord2 <- c(ord2, which(theta2 == idx_cross[a]))
+    }
+    ord1 <- ord1[order(ord1)]; ord2 <- ord2[order(ord2)]
+    out <- theta2
+    for (a in 1:k){out[ord2[a]] <- theta1[ord1[a]]}
+    return (out)
+  }
+  ##EDGE-RECOMBINATION CROSSOVER
+  edge_crossover <- function(theta1, theta2){
+    ##GENERATE EDGE TABLE
+    edge_table <- rep(list(NA), c)
+    idx1 <- order(theta1); idx2 <- order(theta2)
+    for (a in 1:c){
+      if (idx1[a] == 1){link1 <- c(theta1[2], theta1[c])}
+      else if (idx1[a] == c){link1 <- c(theta1[1], theta1[c - 1])}
+      else {link1 <- c(theta1[idx1[a] - 1], theta1[idx1[a] + 1])}
+      if (idx2[a] == 1){link2 <- c(theta2[2], theta2[c])}
+      else if (idx2[a] == c){link2 <- c(theta2[1], theta2[c - 1])}
+      else {link2 <- c(theta2[idx2[a] - 1], theta2[idx2[a] + 1])}
+      edge_table[[a]] <- c(na.omit(unique(c(link1, link2))))
+    }
+    ##CHOOSE THE STARTING POINT
+    if (length(edge_table[[theta1[1]]]) < length(edge_table[[theta2[1]]])){out <- theta1[1]}
+    else {out <- theta2[1]}
+    ##ITERATION
+    for (a in 2:(c - 1)){
+      last_point <- out[length(out)]
+      idx <- edge_table[[last_point]]
+      ##DELETE LAST POINT
+      len <- c()
+      for (b in 1:length(idx)){
+        edge_table[[idx[b]]] = edge_table[[idx[b]]][which(edge_table[[idx[b]]]!=last_point)]
+        len_temp <- length(edge_table[[idx[b]]])
+        ##SOMETIMES LINK WILL BREAK, CHOOSE NEW PARENTS TO CROSS OVER
+        if (len_temp == 0){return(NULL)}
+        len <- c(len, len_temp)
+      }
+      out <- c(out, idx[which.min(len)[1]])
+    }
+    out <- c(out, setdiff(1:c, out))
+    return (out)
+  }
+
+  ###INITIAL VALUES###
+  n <- nrow(df)
+  c <- ncol(df)
+  ##STARTING VALUES OF THETA
+  theta <- matrix(NA, P, c)
+  for (i in 1:P){theta[i, ] <- sample(1:c, c)}
+  ##CALCULATE THE T MATRIX
+  T_matrix <- matrix(NA, c, c)
+  for (i in 1:c){
+    for (j in 1:c){T_matrix[i, j] <- generate_T(i, j)}}
+  ##STARTING VALUES OF PROFILE LOGLIKELIHOOD
+  l <- plog_L(theta)
+  l_best <- max(l)
+  theta_best <- theta[which.max(l), ]
+  l_list <- data.frame('iteration' = 0, 'plogL' = l)
+  
+  ###MAIN###
+  for (i in 1:itertime){
+    
+    ##SELECTION
+    idx_select <- sample(1:P, P, replace = TRUE, prob = fitness(l))
+    theta_select <- theta
+    for (j in 1:P){theta_select[j, ] <- theta[idx_select[j], ]}
+    
+    ##ORDER CROSSOVER
+    if (method == 'order'){
+      theta_cross <- theta_select
+      for (q in seq(1, P - 1, 2)){
+        theta_cross[q, ] <- order_crossover(theta_select[q, ], theta_select[q + 1, ])
+        theta_cross[q + 1, ] <- order_crossover(theta_select[q + 1, ], theta_select[q, ])
+      }
+    }
+    
+    ##EDGE-RECOMBINATION CROSSOVER
+    if (method == 'edge'){
+      theta_cross <- theta_select
+      for (q in 1:(P - 1)){
+        theta_new <- edge_crossover(theta_select[q, ], theta_select[q + 1, ])
+        while (length(theta_new) != 12){theta_new <- edge_crossover(theta_select[sample(1:P, 1), ], theta_select[sample(1:P, 1), ])}
+        theta_cross[q, ] <- theta_new
+      }
+      theta_new <- edge_crossover(theta_select[P, ], theta_select[1, ])
+      while (length(theta_new) != 12){theta_new <- edge_crossover(theta_select[sample(1:P, 1), ], theta_select[sample(1:P, 1), ])}
+      theta_cross[P, ] <- theta_new
+    }
+    
+    ##MUTATION: CHOOSE LOCUS AT MUTATION RATE TO EXCHANGE THE ORDER WITH ANOTHER LOCUS ON THE SAME CHROMOSOME.
+    theta_mutate <- theta_cross
+    idx_mutate <- rbinom(P * c, 1, m)
+    if (1 %in% idx_mutate){
+      for (j in which(idx_mutate == 1)){
+        theta_cross <- theta_mutate
+        if (j %% P != 0){
+          idx_r <- j %% P
+          idx_c <- j %/% P + 1
+        }
+        else {
+          idx_r <- P
+          idx_c <- j %/% P
+        }
+        idx <- sample(seq(1, c)[-which(1:c==idx_c)], 1)
+        theta_mutate[idx_r, idx_c] <- theta_cross[idx_r, idx]
+        theta_mutate[idx_r, idx] <- theta_cross[idx_r, idx_c]
+      }
+    }
+    theta <- theta_mutate
+    l <- plog_L(theta)
+    l_list <- rbind(l_list, data.frame('iteration' = i, 'plogL' = l))
+    if (max(l) > l_best){l_best <- max(l); theta_best <- theta[which.max(l), ]}
+  }
+  
+  ###OUTPUT###
+  structure(list(method = paste('Genetic Algorithm (', ifelse(method=='order', 'order', 'edge-recombination'), ' crossover)', sep = ''), 
+                 iter_best = l_list[which.max(l_list$plogL)[1], 1],
+                 theta_best = theta_best,
+                 plogL_best = l_best,
+                 P = P,
+                 mutationrate = m,
+                 iter_time = itertime,
+                 graph = ggplot() + geom_point(mapping = aes(x = l_list$iteration, y = l_list$plogL), alpha = 0.5) + coord_cartesian(ylim = c(-650, -290)) + labs(title = paste('Genetic Algorithm (', ifelse(method=='order', 'order', 'edge-recombination'), ' crossover)', sep = ''), x = 'Iteration', y = 'plogL') + theme_light()))
+}
+```
+
+Compute results.
+```{r message=FALSE}
+set.seed(1314)
+t <- c()
+result_p <- c()
+for (p in 4:40){
+  start <- Sys.time()
+  result_p = c(result_p, Genetic_Algorithm(data, p, 0.01, 100, 'order', 3)$plogL_best)
+  end <- Sys.time()
+  t <- c(t, end - start)
+}
+ggplot(mapping = aes(x = 4:40, y = t)) + geom_point() + geom_smooth(method = 'lm') + labs(title = 'Computational Difficulty', x = 'size of each generation', y = 'computation time') + theme_light()
+```
+
+Given iteration times = 100, mutation rate = 1%, test the 3-order-crossover(selecting 3 loci to cross over) algorithm with P ranging from 4 to 40. It turns out that the computational difficulty is O(p), which means that this problem can be solved in polynomial time. 
+
+```{r message=FALSE}
+ggplot(mapping = aes(x = 4:40, y = result_p)) + geom_point() + geom_smooth(method = 'lm') + labs(title = 'Profile Log Likelihood Curve', x = 'size of each generation', y = 'plogL') + theme_light()
+```
+
+The performance with given parameters is not very good because only a few of them converge to the global optimal. Nevertheless, the graph above shows a trend that the ending plogL may increase with the size of generation, indicating that increasing P may be a good way to improve the algorithm. Besides, we can also increase the iteration times, change the mutation rate (or even change the random seed, etc.) to help the algorithm find the global optimal.
+
+Choose P=20, mutation rate=0.01, iteration times=100 as the parameter of algorithm baseline (just an example to prove the aforementioned methods make sense). It doesn't converge to the global optimal.
+```{r warning=FALSE}
+set.seed(1314)
+Genetic_Algorithm(data, 20, 0.01, 100, 'order', 3)
+```
+
+- Increase the size of each generation (to 30). This can discourage premature convergence and promote search diversity. But P shouldn't be too large, or the algorithm may be too slow to use.
+```{r warning=FALSE}
+set.seed(1314)
+Genetic_Algorithm(data, 30, 0.01, 100, 'order', 3)
+```
+
+- Increase the iteration times (to 500). More chances are that the algorithm finds the desirable schemata.
+```{r warning=FALSE}
+set.seed(1314)
+Genetic_Algorithm(data, 20, 0.01, 500, 'order', 3)
+```
+
+- Change the mutation rate (to 0.015). The mutation rate shouldn't be too low, or many potentially good innovations will be missed. It shouldn't be too high as well, or the algorithm’s ability to learn over time will be degraded because excessive random variation will disturb the fitness selectivity of parents and the inheritance of desirable schemata.
+```{r warning=FALSE}
+set.seed(1314)
+Genetic_Algorithm(data, 20, 0.015, 100, 'order', 3)
+```
+
+- Change the random seed. Good luck.
+```{r warning=FALSE}
+set.seed(2023)
+Genetic_Algorithm(data, 20, 0.01, 100, 'order', 3)
+```
+
+As we can see, all the measures above can somehow improve the algorithm and help it converge to global optimal and converge faster. Certainly there are many other methods to improve search, but only a few simple common methods are selected here because I think they can show my opinion well enough.
+
+## (b)
+
+Compare the order crossover and the edge-recombination crossover strategy.
+```{r warning=FALSE}
+set.seed(1314)
+p1 <- Genetic_Algorithm(data, 25, 0.01, 200, 'order', 2)$graph
+set.seed(1314)
+p2 <- Genetic_Algorithm(data, 25, 0.01, 200, 'edge')$graph
+set.seed(520)
+p3 <- Genetic_Algorithm(data, 20, 0.02, 200, 'order', 3)$graph
+set.seed(520)
+p4 <- Genetic_Algorithm(data, 20, 0.02, 200, 'edge')$graph
+p1 + p2 + p3 + p4
+```
+
+Compare the speed of fitness improvements by observing the **first 50 iterations**. It seems that edge-recombination crossover is faster than order crossover. I guess it is because order crossover may break the links between loci in parents and unintentionally create mutation which may disturb the fitness selectivity of parents and the inheritance of desirable schemata, while edge-recombination crossover is proposed to produce offspring that contain only links present in at least one parent.

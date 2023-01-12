@@ -1,0 +1,557 @@
+---
+title: "Assignment 4"
+author:
+  - xw-zeng
+date: "2022-12-01"
+documentclass: ctexart
+geometry: "left=3.18cm, right=3.18cm, top=2.54cm, bottom=2.54cm"
+output:
+  rticles::ctex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Problem sets.
+
+- `5.4`
+- `5.5 (a)(b)`
+- `6.3 (a)(b)`
+- `6.5 (a)(b)`
+- `6.9 (a)`
+
+List of optimization functions.
+
+- `Romberg_Integration`: Compute the `Triangular Array` of estimates in Romberg Integration method.
+- `Importance_Sampling`: Estimation using Importance Sampling method with or without standardized weights.
+- `Rejection_Sampling`: Rejection Sampling strategy with or without squeezing function.
+- `SIS_1`: Generate 1 sample using Sequence Importance Sampling.
+- `SIS_mn`: Generate $m$ samples and $n$ resamples using Sequence Importance Sampling.
+
+Load the R packages.
+```{r}
+library(ggplot2)
+```
+
+\newpage
+
+# 5.4
+
+### 1. Briefly summarize **Romberg Integration**.
+
+When $[a,b]$ is partitioned into $n$ subintervals of equal length $h=(b-a)/n$, then the trapezoidal rule estimate is:
+$$
+\int_{a}^{b} f(x) \mathrm{d} x \approx \frac{h}{2} f(a)+h \sum_{i=1}^{n-1} f(a+i h)+\frac{h}{2} f(b)=\widehat{T}(n)
+$$
+
+Triangular Array of m = 6, in which $\widehat{T}_{i,0}=\widehat{T}(2^i)$.
+$$
+\begin{array}{lllllll}
+\widehat{T}_{0,0} & & & & & & \\
+\widehat{T}_{1,0} & \widehat{T}_{1,1} & & & & & \\
+\widehat{T}_{2,0} & \widehat{T}_{2,1} & \widehat{T}_{2,2} & & & & \\
+\widehat{T}_{3,0} & \widehat{T}_{3,1} & \widehat{T}_{3,2} & \widehat{T}_{3,3} & & & \\
+\widehat{T}_{4,0} & \widehat{T}_{4,1} & \widehat{T}_{4,2} & \widehat{T}_{4,3} & \widehat{T}_{4,4} & & \\
+\widehat{T}_{5,0} & \widehat{T}_{5,1} & \widehat{T}_{5,2} & \widehat{T}_{5,3} & \widehat{T}_{5,4} & \widehat{T}_{5,5} & \\
+\widehat{T}_{6,0} & \widehat{T}_{6,1} & \widehat{T}_{6,2} & \widehat{T}_{6,3} & \widehat{T}_{6,4} & \widehat{T}_{6,5} & \widehat{T}_{6,6}
+\end{array}
+$$
+
+### 2. Apply Romberg Integration method to this problem.
+
+X and Y:
+$$
+X \sim Unif[1,a], Y=\frac {a-1} {X}
+$$
+
+Pdf of X:
+$$
+f(x)=\frac{1}{a-1}
+$$
+
+Expectation of Y:
+$$
+E(Y)=\int_{1}^{a} \frac {a-1} {x} f(x) \mathrm{d} x=\int_{1}^{a} \frac {1} {x} \mathrm{d} x
+$$
+
+So the problem of calculating $E(Y)$ is transformed to computing the integral of $\frac {1} {x}$ on $[1,a]$.
+
+Define the function $g(x)=\frac {1} {x}$.
+```{r}
+g <- function(x){1 / x}
+```
+
+Define the function of computing the `Triangular Array` of estimates.
+
+- `m`: Size of triangular array.
+- `l`: lower bound of $x$.
+- `u`: upper bound of $x$.
+```{r}
+Romberg_Integration <- function(m, l, u){
+  
+  ###INITIAL VALUES###
+  T_hat <- matrix(NA, nrow = m + 1, ncol = m + 1)
+  width <- u - l
+  
+  ###MAIN###
+  T_hat[1, 1] <- width * (g(l) + g(u)) / 2
+  for (i in 1:m){ ##i is the first subscript of T_hat
+    h <- width / (2 ^ i)
+    T_hat[i + 1, 1] <- h * (g(l) + g(u)) / 2 + h * sum(g(seq(l + h, u - h, h)))
+    for (j in 1:i){ ##j is the second subscript of T_hat
+      T_hat[i + 1, j + 1] <- (4 ^ j * T_hat[i + 1, j] - T_hat[i, j]) / (4 ^ j - 1)}
+  }
+  
+  ###OUTPUT###
+  row.names(T_hat) = colnames(T_hat) = 0:m
+  return(T_hat)
+}
+```
+
+Compute the Triangular Array (taking $a=10$ as an example).
+```{r, results='hold'}
+Romberg_Integration(6, 1, 10); print(paste0('ln(10) = ', log(10)))
+print(paste0('ERROR = ', Romberg_Integration(6, 1, 10)[7, 7] - log(10)))
+```
+
+So it turns out that $E(Y)=loga$. $\widehat{T}_{6,6}-log(10) \approx 4.657e^{-7}$, while the theoretical error should be around $O(2^{-72})$, namely $O(1e^{-22})$. This difference may be attributed to the loss of precision in the floating-point arithmetic.
+
+\newpage
+
+# 5.5
+
+Import the nodes and weights for Gauss–Legendre quadrature on the range $[-1,1]$.
+```{r}
+x <- c(0.148874338981631, 0.433395394129247, 0.679409568299024,
+       0.865063366688985, 0.973906528517172)
+x <- c(-x[5:1], x)
+A <- c(0.295524224714753, 0.269266719309996, 0.219086362515982,
+       0.149451394150581, 0.066671344308688)
+A <- c(A[5:1], A)
+```
+
+## (a)
+
+Plot the weights versus the nodes.
+```{r, fig.align='center', out.width='70%', fig.width=5, fig.height=3}
+ggplot() + geom_point(aes(x, A), size = 1.5) + theme_light()
+```
+
+## (b)
+
+Compute the exact area under the curve $f(x)=x^2$ between −1 and 1.
+$$
+\int_{-1}^{1} x^2 \mathrm{d} x=\frac {1} {3}x^3{\Big |}_{-1}^{1}=\frac{2}{3}
+$$
+
+\newpage
+
+Define the function $f(x)=x^2$.
+```{r}
+f <- function(x){x ^ 2}
+```
+
+Use `Gauss–Legendre Quadrature` method to compute the area under the curve $f(x)=x^2$ between −1 and 1.
+```{r}
+gl_int <- t(A) %*% f(x); gl_int
+```
+
+The difference between the approximation and the exact integration is:
+```{r}
+gl_int - 2 / 3
+```
+
+The precision is very high, which means Gaussian-Legendre Quadrature is very suitable for approximation of integration of polynomials if good nodes and corresponding weights are chosen.
+
+\newpage
+
+# 6.3
+
+## (a)
+
+Density of X:
+$$
+f(x) \propto exp\{-\frac{\ {|x|}^3}{3}\}
+$$
+
+Expectation of $X^2$:
+$$
+\begin{aligned}
+\sigma^2=E(X^2) &\propto \int_{-\infty}^{+\infty} x^2 exp\{-\frac{\ {|x|}^3}{3}\} \mathrm{d} x \\
+&\propto \int_{-\infty}^{+\infty} x^2 exp\{-\frac{\ {|x|}^3}{3}\} exp\{\frac{{\ x}^2}{2}\} exp\{-\frac{{\ x}^2}{2}\} \mathrm{d} x \\
+&\propto \int_{-\infty}^{+\infty} h(x) w^*(x) g(x) \mathrm{d} x \\
+\end{aligned}
+$$
+
+In which $h(x)=x^2,w^*(x)=exp\{-\frac{\ {|x|}^3}{3}\}{\big /}exp\{-\frac{{\ x}^2}{2}\},g(x)=exp\{-\frac{{\ x}^2}{2}\}$.
+
+Given i.i.d. samples $X_1,X_2,..., X_n$ drawn from $g(x)$, the estimator of Importance Sampling with standardized weights is:
+$$
+\begin{aligned}
+&\hat \sigma^2_{IS}=\sum_{i=1}^{n}h(X_i)w(X_i)\\
+&w(X_i)=w^*(X_i)/\sum_{j=1}^{n}w^*(X_j)
+\end{aligned}
+$$
+
+Define the function of `Importance Sampling` method.
+
+- `n`: Number of samples chosen.
+- `standard`: Whether the weights should be standardized.
+```{r}
+Importance_Sampling <- function(n, standard = TRUE){
+  
+  ###INITIAL VALUES###
+  X <- rnorm(n)
+  
+  ###MAIN###
+  w_star <- exp(- abs(X) ^ 3 / 3) / exp(- X ^ 2 / 2)
+  if (standard == TRUE){w <- w_star / sum(w_star); mu_is <- sum(X ^ 2 * w)}
+  else {mu_is <- mean(X ^ 2 * w_star)}
+
+  ###OUTPUT###
+  return(mu_is)
+}
+```
+
+Estimate $\sigma^2$ using Importance Sampling with standardized weights.
+```{r, results='hold'}
+set.seed(5201314)
+print(paste0('n = 100: ', Importance_Sampling(100)))
+print(paste0('n = 1000: ', Importance_Sampling(1000)))
+print(paste0('n = 10000: ', Importance_Sampling(10000)))
+print(paste0('n = 100000: ', Importance_Sampling(100000)))
+```
+
+## (b)
+
+Envelope:
+$$
+\begin{aligned}
+e(x) &= exp\{-\frac{\ {x}^2}{2}\}/exp\{-\frac{1}{6}\}\\
+&=(\frac{1}{\sqrt{2\pi}}exp\{-\frac{\ {x}^2}{2}\})\Big /(\frac{1}{\sqrt{2\pi}}exp\{-\frac{1}{6}\})=\frac {g(x)}{\alpha}
+\end{aligned}
+$$
+
+In which $g(x)=\frac{1}{\sqrt{2\pi}}exp\{-\frac{\ {x}^2}{2}\},\alpha=\frac{1}{\sqrt{2\pi}}exp\{-\frac{1}{6}\}$.
+
+Squeezing function:
+$$
+s(x) = exp\{-\frac{\ {x}^4}{4}-\frac{1}{12}\}
+$$
+
+Define the function of `Rejection Sampling` method.
+
+- `n`: Target number of samples.
+- `squeezed`: Whether the squeezing function should be introduced.
+```{r}
+Rejection_Sampling <- function(n, squeezed = TRUE){
+  
+  ###INITIAL VALUES###
+  keep <- 0; total <- 0; x <- rep(NA, n)
+  
+  ###FUNCTIONS###
+  f <- function(x){exp(- abs(x) ^ 3 / 3)}
+  e <- function(x){exp(- x ^ 2 / 2 - 1 / 6)}
+  s <- function(x){exp(- x ^ 4 / 4 - 1 / 12)}
+  
+  ###MAIN###
+  while (keep < n){
+    total <- total + 1
+    y <- rnorm(1) ##sample Y ~ g
+    u <- runif(1) ##sample U ~ Unif(0,1)
+    if (squeezed == TRUE & u <= s(y) / e(y)){ ##squeezed rejection
+      keep <- keep + 1
+      x[keep] <- y
+      next
+    }
+    if (u <= f(y) / e(y)){
+      keep <- keep + 1
+      x[keep] <- y
+    }
+  }
+  
+  ###OUTPUT###
+  print(paste0('Total Samples: ', total, '; Kept Samples: ', n,
+               '; Acceptance Rate: ', round(n / total * 100, 2), '%'))
+  return(x)
+}
+```
+
+Define the function of plotting the distribution and estimating $\sigma^2$ using these random samples.
+```{r}
+show_dist <- function(x){
+  hist(x, main = paste0('Rejection Sampling (n = ', length(x), ')'))
+  print(paste0('n = ', length(x), ': ', mean(x ^ 2)))
+}
+```
+
+Generate random samples with Rejection Sampling method and estimate $\sigma^2$.
+```{r, results='hold', fig.width=9, fig.height=5}
+par(mfrow = c(2, 2))
+set.seed(5201314)
+show_dist(Rejection_Sampling(100))
+show_dist(Rejection_Sampling(1000))
+show_dist(Rejection_Sampling(10000))
+show_dist(Rejection_Sampling(100000))
+```
+
+The acceptance rate of Squeezed Rejection Sampling is about 95.96%, indicating that the envelope is very suitable and thus sampling is very efficient.
+
+Now compare the time spent of Rejection Sampling with and without squeezing function.
+```{r, results='hold'}
+set.seed(5201314)
+start <- Sys.time(); s = capture.output(Rejection_Sampling(1000000, FALSE))
+diff <- Sys.time() - start
+print(paste0('Without Squeezing Function: ', round(diff, 2), 's'))
+start <- Sys.time(); s = capture.output(Rejection_Sampling(1000000, TRUE))
+diff <- Sys.time() - start
+print(paste0('With Squeezing Function: ', round(diff, 2), 's'))
+```
+
+It turns out that Squeezed Rejection Sampling is more computationally efficient.
+
+\newpage
+
+# 6.5
+
+## (a)
+
+Let $h_3(U_{1},\ldots,U_{m})=h_2(1-U_{1},\ldots,1-U_{m})$.
+
+Since both $h_1$ and $h_2$ is monotone in each argument, without loss of generality we can suppose that $h_1$ is increasing function and $h_3$ is decreasing function of $U_{1},\ldots,U_{m}$.
+
+1.\ Univariate situation:
+
+\vspace{-0.5cm}
+
+$$
+\begin{aligned}
+&\left[h_{1}\left(X\right)-h_{1}\left(Y\right)\right]\left[h_{3}\left(X\right)-h_{3}\left(Y\right)\right] \leq 0\\
+&E\left[h_{1}\left(X\right) \cdot h_{3}\left(X\right)\right] + E\left[h_{1}\left(Y\right) \cdot h_{3}\left
+(Y\right)\right] -
+E\left[h_{1}\left(X\right) \cdot h_{3}\left(Y\right)\right] - E\left[h_{1}\left(Y\right) \cdot h_{3}\left(X\right)\right] \leq 0\\
+&2E\left[h_{1}\left(X\right) \cdot h_{3}\left(X\right)\right] -
+2E\left[h_{1}\left(X\right)\right] \cdot E\left[h_{3}\left(X\right) \right]=2Cov\left[h_{1}\left(X\right), h_{3}\left(Y\right)\right]\leq 0
+\end{aligned}
+$$
+
+2.\ Suppose the above conclusion holds for all $t<m$, then we have:
+$$
+\begin{aligned}
+&Cov\left[h_{1}\left(U_{1}, \ldots, U_{t}\right), h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right] \leq 0 \\
+&E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]-E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right] E\left[h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right] \leq 0
+\end{aligned}
+$$
+\vspace{-0.2cm}
+$$
+\begin{aligned}
+\Rightarrow  0&\geq E\left\{E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]\right\}-E\left\{E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right] E\left[h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]\right\} \\
+&= E\left\{E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]\right\} - E\left\{g_{1}\left(U_{m}\right) g_{3}\left(U_{m}\right)\right\}\\
+&= E\left\{E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]\right\} - E\left\{g_{1}\left(U_{m}\right)\right\}E\left\{g_{3}\left(U_{m}\right)\right\} - 
+Cov\left\{g_{1}\left(U_{m}\right), g_{3}\left(U_{m}\right)\right\}\\
+&\geq E\left\{h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right)\right\}- E\left\{g_{1}\left(U_{m}\right)\right\}E\left\{g_{3}\left(U_{m}\right)\right\} \\
+&= E\left\{h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right)\right\}-
+E\left\{E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]\right\} E\left\{E\left[h_{3}\left(U_{1}, \ldots, U_{t}\right) \mid U_{m}\right]\right\} \\
+&= E\left\{h_{1}\left(U_{1}, \ldots, U_{t}\right) h_{3}\left(U_{1}, \ldots, U_{t}\right)\right\}-E\left[h_{1}\left(U_{1}, \ldots, U_{t}\right)\right] E\left[h_{3}\left(U_{1}, \ldots, U_{t}\right)\right] \\
+&= Cov\left[h_{1}\left(U_{1}, \ldots, U_{t}\right), h_{3}\left(U_{1}, \ldots, U_{t}\right)\right]
+\end{aligned}
+$$
+
+Therefore, $Cov\left\{h_{1}\left(U_{1}, \ldots, U_{m}\right), h_{2}\left(1-U_{1}, \ldots, 1-U_{m}\right)\right\} \leq 0$ $\Rightarrow$ proved.
+
+## (b)
+
+Pairs of random variables independently generated: $(X_1,Y_1),...(X_n,Y_n)$
+
+Control Variate for $\hat\mu_1$ with mean zero:
+$$
+\begin{aligned}
+&\hat\mu_{MC}=\hat\mu_1\left(X\right)=\frac{1}{n}\sum_{i=1}^{n}\mu_1\left(X_i\right), \quad
+\hat\mu_2\left(Y\right)=\frac{1}{n}\sum_{i=1}^{n}\mu_2\left(Y_i\right)\\
+&Z=\mu_2\left(Y\right)-\mu_1\left(X\right)\\
+&E\left(Z\right)=E\left\{\mu_2\left(Y\right)-\mu_1\left(X\right)\right\}=E\left\{\mu_2\left(Y\right)\right\}-E\left\{\mu_1\left(X\right)\right\}=\mu-\mu=0\\
+&\hat Z=\hat\mu_2\left(Y\right)-\hat\mu_1\left(X\right)
+\end{aligned}
+$$
+
+Control Variate estimator:
+$$
+\hat\mu_{CV}=\hat\mu_1\left(X\right)+\lambda \hat Z=(1-\lambda)\hat\mu_1\left(X\right)+\lambda \hat\mu_2\left(Y\right)
+$$
+
+Derive the optimal $\lambda$. Notice that $\hat\mu_2\left(Y\right)$ is constructed from $Y_1, ..., Y_n$ chosen to be antithetic to $X_1, ..., X_n$, which means the variance of $\hat\mu_2\left(Y\right)$ is equivalent to $\hat\mu_1\left(X\right)$. Let $Var\left\{\hat\mu_1\left(X\right)\right\}=Var\left\{\hat\mu_2\left(Y\right)\right\}=\sigma^2$ and let the correlation coefficient be $\rho < 0$.
+$$
+\begin{aligned}
+&E\left\{\hat{\mu}_{CV}\right\}=\mu, \quad \text { for a given } \lambda \\
+&\begin{aligned}
+Var\left\{\hat{\mu}_{CV}\right\}&=(1-\lambda)^2 \sigma^2+ \lambda^{2} \sigma^2+2 \lambda(1-\lambda) \rho \sigma^2 \\
+&=\sigma^2(1+\lambda^2-2\lambda+\lambda^2+2\rho\lambda-2\rho\lambda^2)\\
+&=\sigma^2\{(2-2\rho)\lambda^2-(2-2\rho)\lambda+1\}\\
+&=\sigma^2\{(2-2\rho)(\lambda-\frac{1}{2})^2+\frac{1+\rho}{2}\}\\
+&\geq \frac{1+\rho}{2}\sigma^2
+\end{aligned}\\
+\end{aligned}
+$$
+
+Consequently, the variance of $\mu_{CV}$ reaches minimum when $\lambda=0.5$.
+
+\newpage
+
+# 6.9
+
+## (a)
+
+Probability distribution for the bug’s path through time $t$:
+$$
+f_{t}\left(x_{1: t}\right)=f_{1}\left(x_{1}\right) f_{2}\left(x_{2} \mid x_{1}\right) \ldots f_{t}\left(x_{t} \mid x_{1: t-1}\right)
+$$
+
+\vspace{-0.5cm}
+
+Bridging distribution:
+$$
+\begin{aligned}
+&f_{t}\left(x_{1: t}\right) \propto exp\{-(|v_t|+|w_t|)-R_t(x_t)/2\}\\
+&\begin{aligned}
+f_{t}\left(x_t|x_{1: t-1}\right)&=f_{t}\left(x_{1: t}\right)/f_{t-1}\left(x_{1: t-1}\right)\\
+&=exp\{-(|v_t|+|w_t|)-R_t(x_t)/2+(|v_{t-1}|+|w_{t-1}|)+R_{t-1}(x_{t-1})/2\}
+\end{aligned}
+\end{aligned}
+$$
+
+Sampling distribution:
+$$
+g_{t}\left(x_t|x_{1: t-1}\right)=\frac{1}{4}
+$$
+
+Importance weights at step t:
+$$
+\begin{aligned}
+w_{t}\left(x_{1: t}\right)=&\frac{f_{1}\left(x_{1}\right) f_{2}\left(x_{2} \mid x_{1: 1}\right) f_{3}\left(x_{3} \mid x_{1: 2}\right) \cdots f_{t}\left(x_{t} \mid x_{1: t-1}\right)}{g_{1}\left(x_{1}\right) g_{2}\left(x_{2} \mid x_{1: 1}\right) g_{3}\left(x_{3} \mid x_{1: 2}\right) \cdots g_{t}\left(x_{t} \mid x_{1: t-1}\right)} \\
+=&w_{t-1}\left(x_{1: t-1}\right) \frac{f_{t}\left(x_{t} \mid x_{1: t-1}\right)}{g_{t}\left(x_{t} \mid x_{1: t-1}\right)} \\
+=&w_{t-1}\left(x_{1: t-1}\right)u_{t}
+\end{aligned}
+$$
+\vspace{-0.4cm}
+
+Define the function of `Sequence Importance Sampling` method (One Sample).
+
+- `t`: Time t in a sequence.
+```{r}
+SIS_1 <- function(t){
+  
+  ###INITIAL VALUES###
+  x <- matrix(NA, nrow = t + 1, ncol = 2); x[1, ] <- c(0, 0); freq_list <- c()
+  
+  ###FUNCTIONS###
+  f_c <- function(oldx, newx){ ##compute conditional density function
+    oldname <- paste0('(', oldx[1], ',', oldx[2], ')')
+    newname <- paste0('(', newx[1], ',', newx[2], ')')
+    out <- exp(- sum(abs(newx)) + sum(abs(oldx)) -
+                 ifelse(newname %in% names(freq_list), freq_list[newname], 0) / 2 +
+                 ifelse(oldname %in% names(freq_list), freq_list[oldname], 0) / 2)
+    return(out)
+  }
+  next_step <- function(oldx){ ##generate sample from g
+    idx <- sample(1:4, 1); newx <- oldx
+    if (idx == 1){newx[1] <- oldx[1] + 1}
+    else if (idx == 2){newx[2] <- oldx[2] - 1}
+    else if (idx == 3){newx[1] <- oldx[1] - 1}
+    else if (idx == 4){newx[2] <- oldx[2] + 1}
+    return(newx)
+  }
+  
+  update_freq <- function(newx){ ##update the frequency list of coordinates
+    name <- paste0('(', newx[1], ',', newx[2], ')')
+    if (name %in% names(freq_list)){freq_list[name] <- freq_list[name] + 1}
+    else {freq_list[name] <- 1}
+    return(freq_list)
+  }
+  
+  generate_u <- function(oldx, newx){ ##compute the incremental weight
+    4 * f_c(oldx, newx)
+  }
+  
+  ###MAIN###
+  x[2, ] <- next_step(x[1, ])
+  freq_list <- update_freq(x[2, ])
+  w <- 4 * f_c(x[1, ], x[2, ])
+  for (i in 1:(t - 1)){
+    x[i + 2, ] <- next_step(x[i + 1, ])
+    freq_list <- update_freq(x[i + 2, ])
+    u <- generate_u(x[i + 1, ], x[i + 2, ])
+    w <- w * u
+  }
+  
+  ###OUTPUT###
+  structure(list(x = x, freq = freq_list, weight = w))
+}
+```
+
+Define the function of `Sequence Importance Sampling` method (including resample).
+
+- `t`: Time t in a sequence.
+- `m`: Sample size.
+- `n`: Resample size. Notice that $n/m \leq 1/10$ is required for distributional convergence.
+```{r}
+SIS_mn <- function(t, m, n){
+  
+  ###INITIAL VALUES###
+  D_list <- c(); M_list <- c(); w_list <- c()
+  
+  ###MAIN###
+  for (i in 1:m){
+    result <- SIS_1(t)
+    D_list <- c(D_list, sum(abs(result$x[t + 1, ])))
+    M_list <- c(M_list, max(result$freq))
+    w_list <- c(w_list, result$weight)
+  }
+  w_list_std <- w_list / sum(w_list)
+  D_list_res <- sample(D_list, n, replace = TRUE, prob = w_list_std)
+  M_list_res <- sample(M_list, n, replace = TRUE, prob = w_list_std)
+  
+  ###OUTPUT###
+  structure(list(D = D_list, D_res = D_list_res, M = M_list, 
+                 M_res = M_list_res, w = w_list, w_std = w_list_std))
+}
+```
+
+Generate samples using `Sequence Importance Sampling` method.
+```{r}
+set.seed(1314); result <- SIS_mn(30, 100000, 5000)
+```
+
+Simulate the distribution of $D_{30}(x_{30})$ and $M_{30}(x_{1:30})$.
+```{r, fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+barplot(table(result$D_res), main = 'Distribution of D30')
+barplot(table(result$M_res), main = 'Distribution of M30')
+```
+
+Estimate the mean of $D_{30}(x_{30})$ and $M_{30}(x_{1:30})$. $w_{t}^{(i)}$ is the standardized weight.
+$$
+\widehat{\mu}_{t}=\sum_{i=1}^{m} w_{t}^{(i)} h\left({x_{1: t}}^{(i)}\right)
+$$
+
+```{r, results='hold'}
+D_mean <- sum(result$D * result$w_std)
+M_mean <- sum(result$M * result$w_std)
+print(paste0('Mean of D30: ', D_mean))
+print(paste0('Mean of M30: ', M_mean))
+```
+
+Estimate the standard deviation of $D_{30}(x_{30})$ and $M_{30}(x_{1:30})$.
+$$
+\widehat{\sigma}_{t}=\left[\frac{1}{1-\sum_{i=1}^{n}\left(w_{t}^{(i)}\right)^{2}} \sum_{i=1}^{n} w_{t}^{(i)}\left[h\left({x_{1: t}}^{(i)}\right)-\widehat{\mu}_{t}\right]^{2}\right]^{\frac{1}{2}}
+$$
+
+```{r, results='hold'}
+D_std <- sqrt(sum(result$w_std * (result$D - D_mean) ^ 2) /
+                (1 - sum(result$w_std ^ 2)))
+M_std <- sqrt(sum(result$w_std * (result$M - M_mean) ^ 2) /
+                (1 - sum(result$w_std ^ 2)))
+print(paste0('Standard deviation of D30: ', D_std))
+print(paste0('Standard deviation of M30: ', M_std))
+```
+
